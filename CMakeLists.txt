@@ -1,81 +1,24 @@
-########################################################
-# cmake file for building Marlin example Package
-# @author Jan Engels, Desy IT
-CMAKE_MINIMUM_REQUIRED(VERSION 2.6 FATAL_ERROR)
-########################################################
+cmake_minimum_required(VERSION 3.14 FATAL_ERROR)
+project(VertexAnalysis)
+
+find_package(ILCUTIL REQUIRED COMPONENTS ILCSOFT_CMAKE_MODULES)
+include(ilcsoft_default_settings)
+
+# Remove this ugly warning
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-effc++")
+message(STATUS "C++ flags are set to: " ${CMAKE_CXX_FLAGS})
 
 
-# project name
-PROJECT( ChargedPFOCorrection )
+include_directories(${PROJECT_SOURCE_DIR}/include)
+add_library(${PROJECT_NAME} SHARED ${PROJECT_SOURCE_DIR}/src/ChargedPFOCorrection.cpp ${PROJECT_SOURCE_DIR}/src/VertexAnalysis.cpp)
 
 
-# project version
-SET( ${PROJECT_NAME}_VERSION_MAJOR 0 )
-SET( ${PROJECT_NAME}_VERSION_MINOR 1 )
-SET( ${PROJECT_NAME}_VERSION_PATCH 0 )
+### DEPENDENCIES ###
+find_package(Marlin REQUIRED)
+find_package(MarlinUtil REQUIRED)
+FOREACH(pkg Marlin MarlinUtil)
+   include_directories(${${pkg}_INCLUDE_DIRS})
+   target_link_libraries(${PROJECT_NAME} ${${pkg}_LIBRARIES})
+ENDFOREACH()
 
-
-
-### DEPENDENCIES ############################################################
-
-FIND_PACKAGE( ILCUTIL REQUIRED COMPONENTS ILCSOFT_CMAKE_MODULES )
-
-# load default settings from ILCSOFT_CMAKE_MODULES
-INCLUDE( ilcsoft_default_settings )
-
-
-FIND_PACKAGE( Marlin 1.0 REQUIRED ) # minimum required Marlin version
-INCLUDE_DIRECTORIES( SYSTEM ${Marlin_INCLUDE_DIRS} )
-LINK_LIBRARIES( ${Marlin_LIBRARIES} )
-ADD_DEFINITIONS( ${Marlin_DEFINITIONS} )
-
-FIND_PACKAGE( MarlinUtil 1.0 REQUIRED ) # minimum required MarlinUtil version
-INCLUDE_DIRECTORIES( SYSTEM ${MarlinUtil_INCLUDE_DIRS} )
-LINK_LIBRARIES( ${MarlinUtil_LIBRARIES} )
-ADD_DEFINITIONS( ${MarlinUtil_DEFINITIONS} )
-
-FIND_PACKAGE( ROOT REQUIRED )
-INCLUDE_DIRECTORIES( SYSTEM ${ROOT_INCLUDE_DIRS} )
-LINK_LIBRARIES( ${ROOT_LIBRARIES} )
-ADD_DEFINITIONS( ${ROOT_DEFINITIONS} )
-
-# optional package
-#FIND_PACKAGE( AIDA )
-#IF( AIDA_FOUND )
-#    INCLUDE_DIRECTORIES( ${AIDA_INCLUDE_DIRS} )
-#    LINK_LIBRARIES( ${AIDA_LIBRARIES} )
-#    ADD_DEFINITIONS( "-DMARLIN_USE_AIDA" )
-#    MESSAGE( STATUS "AIDA -- found" )
-#ELSE()
-#    MESSAGE( STATUS "AIDA -- not found" )
-#ENDIF()
-
-
-
-### DOCUMENTATION ###########################################################
-
-OPTION( INSTALL_DOC "Set to OFF to skip build/install Documentation" OFF )
-
-IF( INSTALL_DOC AND EXISTS "${PROJECT_SOURCE_DIR}/doc/CMakeLists.txt" )
-    ADD_SUBDIRECTORY( ./doc )
-ENDIF()
-
-
-
-### LIBRARY #################################################################
-
-# definitions to pass to the compiler
-# ADD_DEFINITIONS( "-Wall -ansi -pedantic" )
-# ADD_DEFINITIONS( "-Wno-long-long" )
-
-# include directories
-INCLUDE_DIRECTORIES( ./include )
-#INSTALL_DIRECTORY( ./include DESTINATION . FILES_MATCHING PATTERN "*.h" )
-
-# add library
-AUX_SOURCE_DIRECTORY( ./src library_sources )
-ADD_SHARED_LIBRARY( ${PROJECT_NAME} ${library_sources} )
-INSTALL_SHARED_LIBRARY( ${PROJECT_NAME} DESTINATION lib )
-
-# display some variables and write them to cache
-DISPLAY_STD_VARIABLES()
+install(TARGETS ${PROJECT_NAME} DESTINATION ${PROJECT_SOURCE_DIR}/lib)

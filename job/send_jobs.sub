@@ -1,0 +1,16 @@
+executable = /afs/desy.de/user/d/dudarboh/checkVertex/ChargedPFOCorrection/job/job.sh
+initialdir = /nfs/dust/ilc/user/dudarboh/jobs/job$(ProcId)
+arguments = $(file) $(ProcId)
+
+log = job.log
+output = job.out
+error = job.err
+
+request_cpus = 1
+request_memory = 1GB
+request_disk = 10KB
+
+max_retries = 3
+
+queue file from /afs/desy.de/user/d/dudarboh/TOFAnalysis/job/2f_Z_hadronic_250gev_part1.txt
+queue file from /afs/desy.de/user/d/dudarboh/TOFAnalysis/job/2f_Z_hadronic_250gev_part2.txt
