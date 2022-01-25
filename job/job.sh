@@ -4,5 +4,6 @@ export MARLIN_DLL=$MARLIN_DLL:/afs/desy.de/user/d/dudarboh/checkVertex/ChargedPF
 rm -rf * && cp ${1} . && \
 filename=`ls *.slcio` && \
 Marlin /afs/desy.de/user/d/dudarboh/checkVertex/ChargedPFOCorrection/xml/steer.xml --global.LCIOInputFiles="${filename}" && \
-mv -f rename.root ../output/${2}.root && \
+mv -f before_refit.root ../output/before_${2}.root && \
+mv -f after_refit.root ../output/after_${2}.root && \
 rm -f *.slcio

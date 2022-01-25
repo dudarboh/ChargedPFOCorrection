@@ -1,110 +1,227 @@
 #include "VertexAnalysis.hpp"
 
+using namespace std;
 
 VertexAnalysis aVertexAnalysis;
 
 VertexAnalysis::VertexAnalysis():marlin::Processor("VertexAnalysis"){
     _description = "Write interesting parameters into root file";
+
+    registerProcessorParameter("refit_option",
+                              "If true works with verticies after track refitting",
+                              _refitOpt,
+                              bool(false));
+
 }
 
 void VertexAnalysis::init(){
-    _file.reset( new TFile("rename.root", "RECREATE") );
+
+    std::string filename;
+    if (_refitOpt) filename = "after_refit.root";
+    else filename = "before_refit.root";
+    _file.reset( new TFile(filename.c_str(), "RECREATE") );
+    _tree2.reset( new TTree("VertexAnalysis2", "VertexAnalysis") );
+    _tree2->Branch("n_build_up_vertices", &_nBuildUpVertices);
     _tree.reset( new TTree("VertexAnalysis", "VertexAnalysis") );
-
-    _tree->Branch("primary_vtx_old", &_primVtxOld);
-    _tree->Branch("primary_vtx_new", &_primVtxNew);
-    _tree->Branch("primary_vtx_mc", &_primVtxMc);
-
-    _h1 = new TH1F("h1", "N prim vertices,N vtx; Events", 10, 0, 10);
-    _h2 = new TH1F("h2", "N Build Up vertices,N vtx; Events", 10, 0, 10);
-    _h3 = new TH1F("h3", "N Build Up V0 vertices,N vtx; Events", 10, 0, 10);
-    _h4 = new TH1F("h4", "N PFOs in prim vtx,N PFOs; N prim vtx", 60, 0, 60);
-    _h5 = new TH1F("h5", "N PFOs in build up vtx, N PFOs; N build up vtx", 10, 0, 10);
-    _h6 = new TH1F("h6", "N PFOs in build up v0 vtx, N PFOs; N build up v0 vtx", 10, 0, 10);
-    _h7 = new TH1F("h7", "nPFO == nTracks for prim vtx, nPFO == nTracks; N prim vtx", 10, 0, 10);
-    _h8 = new TH1F("h8", "nPFO == nTracks for build up vtx, nPFO == nTracks; N build up vtx", 10, 0, 10);
-    _h9 = new TH1F("h9", "nPFO == nTracks for build up v0 vtx, nPFO == nTracks; N build up v0 vtx", 10, 0, 10);
-
-    // _tree->Branch("nChargedPFOs", &_nChargedPFOs);
-    // _tree->Branch("nPrimaryVerticesOld", &_nPrimaryVerticesOld);
-    // _tree->Branch("nBuildUpVerticesOld", &_nBuildUpVerticesOld);
-    // _tree->Branch("nBuildUpV0VerticesOld", &_nBuildUpV0VerticesOld);
-    // 
-    // _tree->Branch("nPrimaryVerticesNew", &_nPrimaryVerticesNew);
-    // _tree->Branch("nBuildUpVerticesNew", &_nBuildUpVerticesNew);
-    // _tree->Branch("nBuildUpV0VerticesNew", &_nBuildUpV0VerticesNew);
-
+    _tree->Branch("reco_vtx_pos", &_vtxRecoPos);
+    _tree->Branch("mc_vtx_pos", &_vtxMcPos);
+    _tree->Branch("decay_parent_type", &_decayParentType);
+    _tree->Branch("n_confused_tracks", &_nConfusedTracks);
+    _tree->Branch("n_missed_tracks", &_nMissedTracks);
+    _tree->Branch("n_tracks", &_nTracks);
 }
 
 void VertexAnalysis::processEvent( EVENT::LCEvent* event ){
-    std::cout<<"Event "<<++_nEvt<<std::endl;
+    std::cout<<"Event "<<++_nEvent<<std::endl;
 
-    LCCollection* vtxCol = event->getCollection("BuildUpVertex");
+    std::string vtxColName;
+    if (_refitOpt) vtxColName = "BuildUpVertex_2";
+    else vtxColName = "BuildUpVertex";
+    LCCollection* vtxCol = event->getCollection(vtxColName);
+    _nBuildUpVertices = vtxCol->getNumberOfElements();
+    _tree2->Fill();
+
     LCRelationNavigator navRecoToMc( event->getCollection("RecoMCTruthLink") );
-    LCRelationNavigator navTrackToMc( event->getCollection("MarlinTrkTracksMCTruthLink") );
+    XYZVector ip;
+    ip.SetCoordinates( static_cast<MCParticle*> (event->getCollection("MCParticle")->getElementAt(0))->getVertex() );
 
+    for(int i=0; i<_nBuildUpVertices; ++i){
+        Vertex* recoVertex = static_cast<Vertex*> (vtxCol->getElementAt(i));
+        _vtxRecoPos.SetCoordinates(recoVertex->getPosition());
 
-
-
-    for(int i=0; i<vtxCol->getNumberOfElements(); ++i){
-        Vertex* vertex = static_cast<Vertex*> (vtxCol->getElementAt(i));
-        std::vector <ReconstructedParticle*> rps = vertex->getAssociatedParticle()->getParticles();
-        for(int j=0; j<rps.size(); ++j){
-            ReconstructedParticle* rp = rps[j];
-            if (rp->getTracks().size() != 1) break;
-            Track* track = rp->getTracks()[0];
-            // std::cout<<*track<<std::endl;
-
-            const std::vector<LCObject*>& mcs = navRecoToMc.getRelatedToObjects( rp );
-            for(int k=0; k<rps.size(); ++k){
-                MCParticle* mc = static_cast<MCParticle*> (mcs[k]);
-                std::cout<<*mc<<std::endl;
+        //searching for a true vertex
+        std::vector<XYZVector> candidates; // true vertex candidates
+        std::vector<int> candidatesWeights; // n prongs (tracks) from this vertex
+        //create a vector of all possible true vertex positions from reconstructed prongs
+        vector<ReconstructedParticle*> pfos = recoVertex->getAssociatedParticle()->getParticles();
+        for( size_t j=0; j<pfos.size(); ++j ){
+            ReconstructedParticle* pfo = pfos[j];
+            ReconstructedParticle* defaultPfo;
+            if (_refitOpt) defaultPfo = getDefaultPfo(event, pfo);
+            else defaultPfo = pfo;
+            //track weights in relations are based on old tracks/before refit! Does it have an impact?
+            MCParticle* mc = getMcMaxTrackWeight(defaultPfo, navRecoToMc);
+            XYZVector candidate;
+            candidate.SetCoordinates( mc->getVertex() );
+            bool foundInTheList = std::find(candidates.begin(), candidates.end(), candidate) != candidates.end();
+            if (foundInTheList){
+                int idx = std::find(candidates.begin(), candidates.end(), candidate) - candidates.begin();
+                candidatesWeights[idx]++;
             }
-
-            // Track* track = rp->getTracks()[0];
-            
+            else{
+                candidates.push_back(candidate);
+                candidatesWeights.push_back(1);
+            }
         }
+        //take vertex which has the most attached prongs (weights) to it.
+        int maxWeightIdx = std::max_element(candidatesWeights.begin(), candidatesWeights.end()) - candidatesWeights.begin();
+        int maxWeight = candidatesWeights[maxWeightIdx];
+        // check if there are multiple verticies with highest number of prongs
+        if (std::count(candidatesWeights.begin(), candidatesWeights.end(), maxWeight) == 1){
+            //only single max value -- easy case just take vertex at this index
+            _vtxMcPos = candidates[maxWeightIdx];
+        }
+        else{
+            //multiple highest weight cases. Loop and take the furthest from the IP
+            double dToIp = 0.;
+            for(size_t j=0; j <candidates.size(); ++j){
+                if( candidatesWeights[j] == maxWeight && ( (candidates[j] - ip).r() > dToIp ) ){
+                    dToIp = (candidates[j] - ip).r();
+                    _vtxMcPos = candidates[j];
+                }
+            }
+        }
+
+        //get number of confused tracks
+        //get list of reco prongs from the true vertex
+        std::vector<MCParticle*> recoProngsFromTrueVertex;
+        for( size_t j=0; j<pfos.size(); ++j ){
+            ReconstructedParticle* pfo = pfos[j];
+            ReconstructedParticle* defaultPfo;
+            if (_refitOpt) defaultPfo = getDefaultPfo(event, pfo);
+            else defaultPfo = pfo;
+            MCParticle* mc = getMcMaxTrackWeight(defaultPfo, navRecoToMc);
+            //check if this prong from the true vertex
+            XYZVector pos;
+            pos.SetCoordinates( mc->getVertex() );
+            if (pos == _vtxMcPos) recoProngsFromTrueVertex.push_back(mc);
+        }
+        int nTotalRecoProngs = recoVertex->getAssociatedParticle()->getParticles().size();
+        int nTrueRecoProngs = recoProngsFromTrueVertex.size();
+        _nConfusedTracks = nTotalRecoProngs - nTrueRecoProngs;
+
+        //get meson type K/D/B or just other
+        MCParticle* trueProng = recoProngsFromTrueVertex[0];
+        XYZVector prongVertex;
+        prongVertex.SetCoordinates( trueProng->getVertex() );
+        MCParticle* parent = nullptr;
+        int pdg;
+        if ( trueProng->getParents().size() > 0 ){                
+            parent = trueProng->getParents()[0];
+            XYZVector parentVertex;
+            parentVertex.SetCoordinates( parent->getVertex() );
+            while ( parentVertex == prongVertex && parent->getPDG() != 92){
+                parent = parent->getParents()[0];
+                parentVertex.SetCoordinates( parent->getVertex() );
+            }
+            pdg = parent->getPDG();
+        }
+        else{
+            _decayParentType = 0;
+            _nMissedTracks = 0;
+            // cout<<"****** Analyzing vertex # "<<i<<" ***********"<<endl;
+            // cout<<"Reconstructed position: "<<_vtxRecoPos.r()<<" mm"<<endl;
+            // cout<<"True position: "<<_vtxMcPos.r()<<" mm"<<endl;
+            // cout<<"D to IP: "<<(_vtxMcPos - ip).r()<<" mm"<<endl;
+            // cout<<"total reconstructed prongs: "<<nTotalRecoProngs<<endl;
+            // cout<<"total TRUE reconstructed prongs: "<<nTrueRecoProngs<<endl;
+            // cout<<"Confusing tracks: "<<_nConfusedTracks<<endl;
+            // cout<<"Decay parent: "<<_decayParentType<<endl;
+            // cout<<"total TRUE prongs: "<<nTrueRecoProngs<<endl;
+            // cout<<"Missed tracks: "<<_nMissedTracks<<endl;
+            _tree->Fill();
+
+            continue;
+        }
+
+        vector<int> strangeMesons = {130, 310, 311, 321, 9000311, 9000321, 10311, 10321, 100311, 100321, 9010311, 9010321, 9020311, 9020321, 313, 323, 10313, 10323, 20313, 20323, 100313, 100323, 9000313, 9000323, 30313, 30323, 315, 325, 9000315, 9000325, 10315, 10325, 20315, 20325, 9010315, 9010325, 9020315, 9020325, 317, 327, 9010317, 9010327, 319, 329, 9000319, 9000329};
+        vector<int> charmMesons = {411, 421, 10411, 10421, 413, 423, 10413, 10423, 20413, 20423, 415, 425, 431, 10431, 433, 10433, 20433, 435};
+        vector<int> bottomMesons = {511, 521, 10511, 10521, 513, 523, 10513, 10523, 20513, 20523, 515, 525, 531, 10531, 533, 10533, 20533, 535, 541, 10541, 543, 10543, 20543, 545};
+        if( std::find(strangeMesons.begin(), strangeMesons.end(), std::abs(pdg)) != strangeMesons.end() ){
+            _decayParentType = 3;
+        }
+        else if ( std::find(charmMesons.begin(), charmMesons.end(), std::abs(pdg)) != charmMesons.end() ){
+            _decayParentType = 4;
+        }
+        else if ( std::find(bottomMesons.begin(), bottomMesons.end(), std::abs(pdg)) != bottomMesons.end() ){
+            _decayParentType = 5;
+        }
+        else{
+            _decayParentType = 0;
+        }
+
+        //get number of missed tracks
+        int nTotalProngs = 0;
+        XYZVector decayVertex;
+        decayVertex.SetCoordinates( parent->getEndpoint() );
+        vector<MCParticle*> decayChain;
+        fillDecayChainDown(parent, decayChain);
+        for(size_t j=0; j <decayChain.size(); ++j){
+            MCParticle* daughter = decayChain[j];
+            XYZVector daughterVertex;
+            daughterVertex.SetCoordinates( daughter->getVertex() );
+            if (daughterVertex  == decayVertex && daughter->getCharge() != 0 && daughter->getGeneratorStatus() <= 1) nTotalProngs++;
+        }
+
+        _nMissedTracks = nTotalProngs - nTrueRecoProngs;
+
+        // cout<<"****** Analyzing vertex # "<<i<<" ***********"<<endl;
+        // cout<<"Reconstructed position: "<<_vtxRecoPos.r()<<" mm"<<endl;
+        // cout<<"True position: "<<_vtxMcPos.r()<<" mm"<<endl;
+        // cout<<"D to IP: "<<(_vtxMcPos - ip).r()<<" mm"<<endl;
+        // cout<<"total reconstructed prongs: "<<nTotalRecoProngs<<endl;
+        // cout<<"total TRUE reconstructed prongs: "<<nTrueRecoProngs<<endl;
+        // cout<<"Confusing tracks: "<<_nConfusedTracks<<endl;
+        // cout<<"Decay parent: "<<_decayParentType<<endl;
+        // cout<<"total TRUE prongs: "<<nTotalProngs<<endl;
+        // cout<<"Missed tracks: "<<_nMissedTracks<<endl;
+
+
+        _tree->Fill();
     }
-
-
-
-
-    // LCCollection* primaryVerticesNew = event->getCollection("PrimaryVertex_2");
-
-
-
-    // LCCollection* pfos = event->getCollection("PandoraPFOs");
-    // LCRelationNavigator pfoToMc( event->getCollection("RecoMCTruthLink") );
-    // 
-    // 
-    // LCCollection* mcs = event->getCollection("MCParticle");
-    // // UTIL::LCTOOLS::printMCParticles(mcs);
-    // MCParticle* mc = static_cast<MCParticle*> (mcs->getElementAt(0));
-    // _primVtxMc.SetCoordinates( mc->getVertex() );
-    // 
-    // 
-    // Vertex* primVtxOld = static_cast<Vertex*> (primaryVerticesOld->getElementAt(0));
-    // _primVtxOld.SetCoordinates( primVtxOld->getPosition() );
-    // 
-    // Vertex* primVtxNew = static_cast<Vertex*> (primaryVerticesNew->getElementAt(0));
-    // _primVtxNew.SetCoordinates( primVtxNew->getPosition() );
-    // 
-    // _tree->Fill();
+    
+  
 }
 
 void VertexAnalysis::end(){
     _file->Write();
 }
 
-EVENT::MCParticle* VertexAnalysis::getMcMaxWeight(UTIL::LCRelationNavigator pfoToMc, EVENT::ReconstructedParticle* pfo){
-    MCParticle* mc = nullptr;
-    const std::vector <LCObject*>& mcs = pfoToMc.getRelatedToObjects(pfo);
-    const std::vector <float>& mcWeights = pfoToMc.getRelatedToWeights(pfo);
-    // weight //10000 = energy fraction of this MC particle in the cluster
-    // weight % 10000 = number of tracker hits in per-mile of this MC particle in the track
-    if (mcs.size() == 0) return mc;
-    //I simply check the larger weight, meaning highest energy fraction. If two particles have equal energy fraction, choose with more track hits..
-    int maxW = std::max_element(mcWeights.begin(), mcWeights.end()) - mcWeights.begin();
-    mc = static_cast <MCParticle*> ( mcs[maxW] );
-    return mc;
+EVENT::MCParticle* VertexAnalysis::getMcMaxTrackWeight(EVENT::ReconstructedParticle* pfo, UTIL::LCRelationNavigator nav){
+    const vector<LCObject*>& mcs = nav.getRelatedToObjects(pfo);
+    const vector<float>& weights = nav.getRelatedToWeights(pfo);
+    //get index of highest TRACK weight MC particle
+    int i = std::max_element(weights.begin(), weights.end(), [](float a, float b){return (int(a)%10000)/1000. < (int(b)%10000)/1000.;}) - weights.begin();
+    return static_cast<MCParticle*> ( mcs[i] );
+}
+
+void VertexAnalysis::fillDecayChainDown(EVENT::MCParticle* mc, std::vector<EVENT::MCParticle*>& decayChain){
+    // stop iterating down at particles not created by generator
+    if(mc->getGeneratorStatus() == 0) return;
+    decayChain.push_back(mc);
+    const vector<MCParticle*> daughters = mc->getDaughters();
+    for(auto daughter : daughters){
+        bool foundInTheList = std::find(decayChain.begin(), decayChain.end(), daughter) != decayChain.end();
+        if ( !foundInTheList ) fillDecayChainDown(daughter, decayChain);
+    }
+}
+
+ReconstructedParticle* VertexAnalysis::getDefaultPfo(EVENT::LCEvent* event, EVENT::ReconstructedParticle* pfo){
+    LCCollection* pfos1 = event->getCollection("PandoraPFOs");
+    LCCollection* pfos2 = event->getCollection("updatedPandoraPFOs");
+    for(int i=0; i < pfos2->getNumberOfElements(); ++i){
+        ReconstructedParticle* pfoTmp = static_cast<ReconstructedParticle*> ( pfos2->getElementAt(i) );
+        if (pfo == pfoTmp) return static_cast<ReconstructedParticle*> ( pfos1->getElementAt(i) );
+    }
+    return nullptr;
 }
